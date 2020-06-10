@@ -1,0 +1,387 @@
+﻿<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport"
+          content="initial-scale=1,maximum-scale=1,user-scalable=no" />
+    <title>Filiari Bancarie</title>
+
+    <style>
+
+        html,
+        body,
+        #viewDiv {
+            padding: 0;
+            margin: 0;
+            height: 100%;
+            width: 100%;
+        }
+        #paneDiv {
+            background-color: dimgray;
+            color: white;
+            padding: 10px;
+            width: 350px;
+        }
+    </style>
+
+    <link rel="stylesheet"
+          href="https://js.arcgis.com/4.15/esri/themes/light/main.css" />
+    <script src="https://js.arcgis.com/4.15/"></script>
+
+    <script>
+        require([
+            "esri/Map",
+            "esri/layers/FeatureLayer",
+            "esri/views/MapView",
+            "esri/widgets/Legend",
+            "esri/widgets/Home",
+            "esri/tasks/IdentifyTask",
+            "esri/tasks/support/IdentifyParameters",
+            "esri/request",
+            "esri/Graphic",
+            "esri/layers/GraphicsLayer",
+            "esri/widgets/DistanceMeasurement2D",
+            "esri/widgets/AreaMeasurement2D",
+            "esri/tasks/support/FeatureSet",
+            "esri/geometry/Polygon",
+            "esri/widgets/Sketch",
+            "esri/widgets/Sketch/SketchViewModel",
+            "esri/symbols/SimpleMarkerSymbol"
+        ], function (Map, FeatureLayer, MapView, Legend, Home, IdentifyTask, IdentifyParameters, esriRequest,
+                Graphic, GraphicsLayer, DistanceMeasurement2D, AreaMeasurement2D,
+                FeatureSet, Polygon, Sketch, SketchViewModel, SimpleMarkerSymbol) {
+
+                var activeWidget = null;
+
+                var mapServiceURL = "https://localhost:6443/arcgis/rest/services/TEST_SOE/Ciambelle/MapServer";
+                var fLayerClientiURL = mapServiceURL + "/0";
+                var fLayerFiliariURL = mapServiceURL + "/1";
+
+
+                var SOEFeatureDownload = "https://localhost:6443/arcgis/rest/services/TEST_SOE/Ciambelle/MapServer/exts/SOE_FeatureDownload/oggettiDownload";
+
+                // Mi dedico a creare i PoputTemplate e Feature Layer!
+                /*************************************************************
+                 * The PopupTemplate content is the text that appears inside the
+                 * popup. {fieldName} can be used to reference the value of an
+                 * attribute of the selected feature. HTML elements can be used
+                 * to provide structure and styles within the content. The
+                 * fieldInfos property is an array of objects (each object representing
+                 * a field) that is use to format number fields and customize field
+                 * aliases in the popup and legend.
+                 **************************************************************/
+
+                var templateFiliari = {
+                    // autocasts as new PopupTemplate()
+                    title: "{NOME_BANCA}, ID: {OBJECTID}",
+                    content: [
+                        {
+                            // It is also possible to set the fieldInfos outside of the content
+                            // directly in the popupTemplate. If no fieldInfos is specifically set
+                            // in the content, it defaults to whatever may be set within the popupTemplate.
+                            type: "fields",
+                            fieldInfos: [
+                                {
+                                    fieldName: "NOME_BANCA",
+                                    label: "Nome della Filiare"
+                                },
+                                {
+                                    fieldName: "OBJECTID",
+                                    label: "Identificativo della Filiare",
+                                    format: {
+                                        digitSeparator: true,
+                                        places: 0
+                                    }
+                                }
+                            ]
+                        }
+                    ]
+                };
+
+                var fLayerFiliari = new FeatureLayer({
+                    url: fLayerFiliariURL,
+                    popupTemplate: templateFiliari,
+                    visible: true
+                });
+   
+
+                // GraphicsLayer for displaying results
+                var resultsLayer = new GraphicsLayer();
+
+                var graphicsLayerSkectch = new GraphicsLayer();
+
+                // Create the map
+                var map = new Map({
+                    basemap: "gray",
+                    layers: [fLayerFiliari, resultsLayer]
+                });
+
+                map.add(fLayerFiliari);
+
+                // Create the MapView
+                var view = new MapView({
+                    container: "viewDiv",
+                    map: map,
+                    center: [9.19, 45.47], // long, lat --> REGIONE LOMBARDIA
+                    zoom: 12
+                });
+
+                var homeBtn = new Home({
+                    view: view
+                });
+                // Add the home button to the top left corner of the view
+                view.ui.add(homeBtn, "top-left");
+
+                view.when(function () {
+                    // executeIdentifyTask() is called each time the view is clicked
+
+                    // Create identify task for the specified map service
+                    identifyTask = new IdentifyTask(mapServiceURL);
+
+                    // Set the parameters for the Identify
+                    params = new IdentifyParameters();
+                    params.tolerance = 10;
+                    params.layerIds = [1];
+                    params.layerOption = "top";
+                    params.width = view.width;
+                    params.height = view.height;
+                    params.returngeometry = true;
+                });
+
+                function CreaBufferCircolare(inputJSON, colore) {
+
+                    var objJSONBuffer = JSON.parse(JSON.stringify(inputJSON));
+
+                    var poligono = new Polygon({
+                        hasZ: false,
+                        hasM: false,
+                        rings: objJSONBuffer.rings,
+                        spatialReference: objJSONBuffer.spatialReference
+                    });
+
+                    bufferGraphic = new Graphic({
+                        geometry: poligono,
+                        symbol: {
+                            type: "simple-fill", // autocasts as new SimpleFillSymbol()
+                            outline: {
+                                width: 1.5,
+                                color: colore //[255, 128, 0, 0.5]
+                            },
+                            style: "none"
+                        }
+                    });
+
+                        view.graphics.add(bufferGraphic);
+                };
+
+                view.ui.add("SelezionaTramitePoligono", "top-left");
+
+                document.getElementById("bottoneSelezioneRettangolare").addEventListener("click", function() {
+                    cancellaTutto();
+                    view.popup.close();
+                    // ready to draw a polygon
+                    sketchViewModel.create("polygon");
+                });
+
+                // create a new sketch view model set its layer
+                sketchViewModel = new SketchViewModel({
+                    view: view,
+                    layer: resultsLayer,
+                    pointSymbol: {
+                        type: "simple-marker",
+                        color: [255, 255, 255, 0],
+                        size: "1px",
+                        outline: {
+                            color: "gray",
+                            width: 0
+                        }
+                    }
+                });
+
+                sketchViewModel.on("create", function(event) {
+                    if (event.state === "complete") {
+                        selectFeatures(event.graphic.geometry);
+                    }
+                });
+
+                function selectFeatures(geometria) {
+                    cancellaTutto();
+                    //alert("oggetti selezionati!");
+
+                    var simbolo = new SimpleMarkerSymbol({
+                        style: "circle",
+                        size: 20,
+                        color: "green",
+                        outline: {
+                        width: 1,
+                        color: "neon",
+                        style: "solid"
+                        }
+                    });
+
+                    var query = fLayerFiliari.createQuery();
+                    query.geometry = geometria;
+                    query.units = "meters";
+                    query.spatialRelationship = "intersects";
+                    query.returnGeometry = true;
+                    query.outFields = ["OBJECTID"];
+
+                    fLayerFiliari.queryFeatures(query).then(function(response) {
+                        //console.log(response);
+                        var listaOID = [];
+                        var listaFeature = response.features;
+
+                        listaFeature.forEach(element => {
+                            listaOID.push(element.attributes.OBJECTID);
+                            //listaOID[element.attributes.OBJECTID] = element.attributes.OBJECTID;
+
+                            var pointGraphic = new Graphic({
+                                geometry: element.geometry,
+                                symbol: simbolo,
+                                attributes: element.attributes
+                            });
+
+                            view.graphics.add(pointGraphic);
+
+                        });
+                        console.log(listaOID);
+
+                        // Eseguo la chiamata alla SOE
+                        var content = {
+                            query: {
+                                'listaOID' : JSON.stringify(listaOID),
+                                'URLServiceLayer' : fLayerFiliariURL,
+                                'f': "json"
+                            },
+                            responseType: 'json'
+                        };
+
+                        console.log(content);
+
+                        // Chiamo la SOE
+                        esriRequest(SOEFeatureDownload, content).then(function (response) {
+
+                        if (response.data.hasError == true) {
+                            alert(response.data.errorDescription)
+                        }
+                        else {
+                            var interno = response.data.interno;
+
+                            if (interno.features.length == 0) {
+                                alert("Nessun dato da scaricare!");
+                            }
+                            else {
+                                alert(interno.features.length);
+                            }
+                        };
+                    });
+                    });
+
+                };
+
+                function cancellaTutto() {
+                    resultsLayer.removeAll();
+                    view.graphics.removeAll();
+                    graphicsLayerSkectch.removeAll();
+                };
+
+                view.ui.add("BottoniGiancaGIS", "top-left");
+
+                document.getElementById("RimuoviGraphics").addEventListener("click", function() {
+                    //alert("Tasto cliccato!");
+                    cancellaTutto();
+                });
+
+                // Mi occupo della parte legata al widget del righello
+                view.ui.add("topbar", "top-left");
+
+                document
+                    .getElementById("distanceButton")
+                    .addEventListener("click", function () {
+                        setActiveWidget(null);
+                        if (!this.classList.contains("active")) {
+                            setActiveWidget("distance");
+                        } else {
+                            setActiveButton(null);
+                        }
+                    });
+
+                document
+                    .getElementById("areaButton")
+                    .addEventListener("click", function () {
+                        setActiveWidget(null);
+                        if (!this.classList.contains("active")) {
+                            setActiveWidget("area");
+                        } else {
+                            setActiveButton(null);
+                        }
+                    });
+
+                function setActiveWidget(type) {
+                    switch (type) {
+                        case "distance":
+                            activeWidget = new DistanceMeasurement2D({
+                                view: view
+                            });
+
+                            // skip the initial 'new measurement' button
+                            activeWidget.viewModel.newMeasurement();
+
+                            view.ui.add(activeWidget, "top-right");
+                            setActiveButton(document.getElementById("distanceButton"));
+                            break;
+                        case "area":
+                            activeWidget = new AreaMeasurement2D({
+                                view: view
+                            });
+
+                            // skip the initial 'new measurement' button
+                            activeWidget.viewModel.newMeasurement();
+
+                            view.ui.add(activeWidget, "top-right");
+                            setActiveButton(document.getElementById("areaButton"));
+                            break;
+                        case null:
+                            if (activeWidget) {
+                                view.ui.remove(activeWidget);
+                                activeWidget.destroy();
+                                activeWidget = null;
+                            }
+                            break;
+                    }
+                };
+        });
+    </script>
+</head>
+
+<body>
+    <div id="viewDiv"></div>
+
+    <div id="topbar">
+        <button class="action-button esri-icon-measure-line"
+                id="distanceButton"
+                type="button"
+                title="Measure distance between two or more points"></button>
+        <button class="action-button esri-icon-measure-area"
+                id="areaButton"
+                type="button"
+                title="Measure area"></button>
+    </div>
+
+    <div id="BottoniGiancaGIS">
+        <button class="esri-icon-close-circled"
+        id="RimuoviGraphics"
+        type="button"
+        title="Clicca per rimuovere tutti i graphics.">
+        </button>
+    </div>
+
+    <div id="SelezionaTramitePoligono">
+        <button class="esri-icon-sketch-rectangle"
+        id="bottoneSelezioneRettangolare"
+        title="Seleziona le features by polygon">
+        </button>
+    </div>
+
+</body>
+</html>
