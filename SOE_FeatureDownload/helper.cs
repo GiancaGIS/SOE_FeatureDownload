@@ -126,202 +126,77 @@ namespace SOE_Utilita
             return workspace;
         }
 
-        internal static void CopiaFeatureClass
-            (IPropertySet propertySetIN, IPropertySet propertySetOUT,
-            string nomeFCIN,
-            out string warningErroriCopiaDati,
-            string WorkspaceFactoryProgID_IN = "esriDataSourcesGDB.SDEWorkspaceFactory",
-            string WorkspaceFactoryProgID_OUT = "esriDataSourcesGDB.FileGDBWorkspaceFactor")
+        /// <summary>
+        /// Data una workspace di input ricava una Workspace Name
+        /// </summary>
+        /// <param name="workspace"></param>
+        /// <returns></returns>
+        internal static IWorkspaceName RicavaWorkspaceName(IWorkspace workspace)
         {
-            try
-            {
-                warningErroriCopiaDati = String.Empty;
-
-                // Imposto la Workspace di output (il FGDB)
-                IWorkspaceName outWorkspaceName = new WorkspaceName() as IWorkspaceName;
-                outWorkspaceName.ConnectionProperties = propertySetOUT;
-                //outWorkspaceName.WorkspaceFactoryProgID = WorkspaceFactoryProgID_OUT;
-
-                IFeatureClassName OutFCName = new FeatureClassNameClass();
-
-                IDatasetName outDatasetName = OutFCName as IDatasetName;
-                outDatasetName.Name = nomeFCIN;
-                outDatasetName.WorkspaceName = outWorkspaceName;
-                IFeatureDatasetName outFeatureDatasetName = new FeatureDatasetNameClass();
-
-
-                // Imposto la Workspace di input
-                IWorkspaceFactory2 InworkF = new FileGDBWorkspaceFactory() as IWorkspaceFactory2;
-                IWorkspace InWorkspace = InworkF.Open(propertySetIN, 0);
-                IFeatureWorkspace featureWorkspace = InWorkspace as IFeatureWorkspace;
-                
-                IWorkspaceName inWorkspaceName = new WorkspaceName() as IWorkspaceName;
-                inWorkspaceName.ConnectionProperties = InWorkspace.ConnectionProperties;
-                //inWorkspaceName.WorkspaceFactoryProgID = WorkspaceFactoryProgID_IN;
-
-                IFeatureClassName InFCName = new FeatureClassNameClass();
-
-                IDatasetName InDatasetName = InFCName as IDatasetName;
-                InDatasetName.Name = nomeFCIN;
-                InDatasetName.WorkspaceName = inWorkspaceName;
-
-
-                // Mi dedico alla apertura della Feature Class di input per ricavare le field definitions
-                IFeatureClass featureClassIn = featureWorkspace.OpenFeatureClass(nomeFCIN);
-
-                // Valido gli attributi della Feature Class di Input
-                IFields fieldsIn = featureClassIn.Fields;
-                IFieldChecker fieldChecker = new FieldCheckerClass();
-                fieldChecker.Validate(fieldsIn, out IEnumFieldError enumFieldError, out IFields fieldsOut);
-
-                // Loop attraverso gli attributi per cercare quello geometrico
-                IField attributoGeometrico = null;
-                for (int cont = 0; cont < fieldsOut.FieldCount; cont ++)
-                {
-                    if (fieldsOut.Field[cont].Type == esriFieldType.esriFieldTypeGeometry)
-                    {
-                        attributoGeometrico = fieldsOut.Field[cont];
-                        break;
-                    }
-                }
-
-                // Ricavo la geometry definition della Feature Class di input
-                IGeometryDef geometryDefOUT_Fc = attributoGeometrico.GeometryDef;
-
-                // Per la Feature Class di output, fornisco la geometry definition di output, lo spatial index grid count
-                // e la grid size
-                IGeometryDefEdit geometryDefEdit = geometryDefOUT_Fc as IGeometryDefEdit;
-                geometryDefEdit.GridCount_2 = 1;
-                geometryDefEdit.GridSize_2[0] = CalcolaDefaultIndexFC(featureClassIn, out bool errore, out string msgErrore);
-
-                if (!errore)
-                {
-                    geometryDefEdit.SpatialReference_2 = ((IGeoDataset)featureClassIn).SpatialReference;
-
-                    // Mi preparo alla copia della Feature Class
-                    IFeatureDataConverter2 featureDataConverter = new FeatureDataConverterClass();
-                    IEnumInvalidObject enumInvalid = 
-                        featureDataConverter.ConvertFeatureClass(InDatasetName, null, null, outFeatureDatasetName, OutFCName, geometryDefOUT_Fc, fieldsOut, "", 1000, 0);
-
-                    IInvalidObjectInfo invalidObject = enumInvalid.Next();
-                    if (invalidObject != null)
-                        warningErroriCopiaDati = "Feature Class copiata ma con errori!";
-                }
-
-            }
-            catch (Exception)
-            {
-
-                throw;
-            }
+            IDataset dataset = (IDataset)workspace;
+            IName name = dataset.FullName;
+            IWorkspaceName workspaceName = (IWorkspaceName)name;
+            return workspaceName;
         }
 
-        internal static double CalcolaDefaultIndexFC(IFeatureClass featureClass, out bool errore, out string messaggioErrore)
+        internal static IName RicavaDatasetName(IDataset datasetInput, IWorkspaceName workspaceName)
         {
-            double DefaultIndexGrid = -9999;
-            errore = false;
-            messaggioErrore = String.Empty;
-            const int fattore = 1;
-            int proporzionalita = 1;
-
-            double dblMaxDelta = 0;
-            double dblMinDelta = 1000000000000d;
-            double dblQuadratezzaExtent = 1;
-
-            try
+            IDatasetName datasetName = null;
+            switch (datasetInput.Type)
             {
-                int numeroFeatures = featureClass.FeatureCount(null) - 1;
-                if (numeroFeatures > 1000)
-                    proporzionalita = 1000;
+                case esriDatasetType.esriDTFeatureDataset:
+                    IFeatureDatasetName InFeatureDatasetName = new FeatureDatasetNameClass();
+                    datasetName = (IDatasetName)InFeatureDatasetName;
+                    break;
 
-                if (numeroFeatures <= 0)
-                {
-                    DefaultIndexGrid = 1000;
-                    return DefaultIndexGrid;
-                }
-                else
-                {
-                    if(featureClass.ShapeType == esriGeometryType.esriGeometryPoint || featureClass.ShapeType == esriGeometryType.esriGeometryMultipoint)
-                    {
-                        DefaultIndexGrid = CalcolaDefaultIndex_Fc_Point(featureClass);
-                        return DefaultIndexGrid;
-                    }
-                    else
-                    {
-                        // Ricavo nome OID della Feature Class di input
-                        string OID = featureClass.OIDFieldName;
-
-                        // Ricavo Envelope della intera Feature Class
-                        IGeoDataset geoDataset = featureClass as IGeoDataset;
-                        IEnvelope envelope = geoDataset.Extent;
-
-                        // Ricavo una stima sulla "quadratezza" dell'extent della Feature Class
-
-                        dblMaxDelta = Math.Max(dblMaxDelta, Math.Max(envelope.Width, envelope.Height));
-                        dblMinDelta = Math.Min(dblMinDelta, Math.Min(envelope.Width, envelope.Height));
-
-                        if (dblMinDelta != 0)
-                        {
-                            dblQuadratezzaExtent =
-                                1 + (Math.Min(envelope.Width, envelope.Height) / Math.Max(envelope.Width, envelope.Height));
-                        }
-                        else
-                        {
-                            dblQuadratezzaExtent = dblQuadratezzaExtent + 0.0001d;
-                        }
-
-                        if (dblQuadratezzaExtent / proporzionalita > 0.5)
-                        {
-                            DefaultIndexGrid = (dblMinDelta + ((dblMaxDelta - dblMinDelta) / 2)) * fattore;
-                            return DefaultIndexGrid;
-                        }
-                        else
-                        {
-                            DefaultIndexGrid = Math.Round((dblMaxDelta / 2) * fattore, 3);
-                            return DefaultIndexGrid;
-                        }
-                    }
-                }
-
-            }
-            catch (Exception ex)
-            {
-                errore = true;
-                messaggioErrore = ex.Message;
+                case esriDatasetType.esriDTFeatureClass:
+                    IFeatureClassName InFeatureClassName = new FeatureClassNameClass();
+                    datasetName = (IDatasetName)InFeatureClassName;
+                    break;
+                case esriDatasetType.esriDTTable:
+                    ITableName InTableName = new TableNameClass();
+                    datasetName = (IDatasetName)InTableName;
+                    break;
+                case esriDatasetType.esriDTGeometricNetwork:
+                    IGeometricNetworkName InGeometricNetworkName = new GeometricNetworkNameClass();
+                    datasetName = (IDatasetName)InGeometricNetworkName;
+                    break;
+                default:
+                    return null;
             }
 
-            return DefaultIndexGrid;
+            // Set the name and workspace name of the new name object.
+            datasetName.Name = datasetInput.Name;
+            datasetName.WorkspaceName = workspaceName;
+            // Cast the object to the IName interface and return it.
+            IName name = (IName)datasetName;
+            return name;
         }
 
-        private static double CalcolaDefaultIndex_Fc_Point(IFeatureClass featureClass)
+        internal static IEnumName RicavaDatasetNameEnum(List<IName> nameList)
         {
-            try
+            // Create the enumerator and cast it to the IEnumNameEdit interface.
+            IEnumName enumName = new NamesEnumerator();
+            IEnumNameEdit enumNameEdit = (IEnumNameEdit)enumName;
+            // Add the input name objects to the enumerator and return it.
+            foreach (IName name in nameList)
             {
-                // Ricavo Envelope della intera Feature Class
-                IGeoDataset geoDataset = featureClass as IGeoDataset;
-                IEnvelope envelope = geoDataset.Extent;
-
-                // Calcolo la approssimata Primo Spatial Index
-                int numeroFeatures = featureClass.FeatureCount(null) - 1;
-
-                double DefaultIndexGridPoint;
-                if (numeroFeatures == 0 || envelope.IsEmpty)
-                {
-                    DefaultIndexGridPoint = 1000;
-                    return DefaultIndexGridPoint;
-                }
-                else
-                {
-                    double area = envelope.Height / envelope.Width;
-                    // Approssimo l'indice spaziale come la radice quadrata dell'area fratto il numero di features
-                    DefaultIndexGridPoint = Math.Sqrt(area / numeroFeatures);
-                    return DefaultIndexGridPoint;
-                }
+                enumNameEdit.Add(name);
             }
-            catch (Exception)
-            {
-                throw;
-            }
+            return enumName;
         }
+
+        internal static void CopiaFeatureClass(IEnumName enumSourceName, IName targetName)
+        {
+            // Create the transfer object and a reference to a mapping enumerator.
+            IGeoDBDataTransfer geoDBDataTransfer = new GeoDBDataTransfer();
+            IEnumNameMapping[] enumNameMapping = new IEnumNameMapping[1];
+            // See if the transfer can proceed with the datasets' existing names.
+            _ = geoDBDataTransfer.GenerateNameMapping(enumSourceName, targetName, out enumNameMapping[0]);
+
+            geoDBDataTransfer.Transfer(enumNameMapping[0], targetName);
+
+        }
+
     }
 }

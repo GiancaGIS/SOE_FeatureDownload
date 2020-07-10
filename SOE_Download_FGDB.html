@@ -267,11 +267,13 @@
                         else {
                             var interno = response.data.interno;
 
-                            if (interno.features.length == 0) {
+                            if (interno.length == 0) {
                                 alert("Nessun dato da scaricare!");
                             }
                             else {
-                                alert(interno.features.length);
+                                console.log(interno.length);
+                                // Apro il URL, ovvero lo zip col FGDB!
+                                window.open(response.data.zip, '_blank');
                             }
                         };
                     });

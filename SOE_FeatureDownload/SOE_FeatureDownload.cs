@@ -9,6 +9,10 @@ using System.Collections.Specialized;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.IO.Compression;
+using System.Collections.Generic;
+using ESRI.ArcGIS.Carto;
+using ESRI.ArcGIS.Geoprocessing;
 
 //TODO: sign the project (project properties > signing tab > sign the assembly)
 //      this is strongly suggested if the dll will be registered using regasm.exe <your>.dll /codebase
@@ -123,6 +127,9 @@ namespace SOE_FeatureDownload
             if (!okParam2 || paramURL == String.Empty)
                 throw new ArgumentNullException("URLServiceLayer");
 
+            IGeoProcessor2 gp = new GeoProcessor() as IGeoProcessor2;
+            gp.OverwriteOutput = true;
+
             try
             {
                 result.AddArray("interno", paramListaOID);
@@ -130,16 +137,45 @@ namespace SOE_FeatureDownload
                 // Ricavo Feature Class dietro al Service Layer
                 IFeatureClass featureClass = MapServiceHelper_GiancaGIS.RicavaFCDaURLServiceLayer(this.serverObjectHelper, paramURL);
 
-                IWorkspace workspace = WorkspaceHelper_GiancaGIS.RicavaWorkSpaceFC(featureClass, out IPropertySet propertySetIN, 
-                    out string tipoWorkspace, out bool errore, out string msgErrore);
+                IFeatureLayer fLayer = new FeatureLayerClass
+                {
+                    FeatureClass = featureClass,
+                    Name = "Mio Layer",
+                    SpatialReference = ((IGeoDataset)featureClass).SpatialReference
+                };
 
-                this.CreaWorkSpaceOutput(out IPropertySet propertySetOUT, out string pathFGDB);
+                IFeatureSelection featureSelection = fLayer as IFeatureSelection;
 
-                SOE_Utilita.WorkspaceHelper_GiancaGIS.CopiaFeatureClass(propertySetIN, propertySetOUT, (featureClass as IDataset).Name, out string warning);
-            
+
+                IQueryFilter2 queryFilter = new QueryFilterClass
+                {
+                    WhereClause = "OBJECTID IN (" + String.Join(",", paramListaOID) + ")"
+                };
+
+                featureSelection.SelectFeatures(queryFilter, esriSelectionResultEnum.esriSelectionResultNew, false);
+
+
+                this.CreaWorkSpaceOutput(out IWorkspaceName WorkspaceNameOUT, out string pathFGDB);
+
+                IVariantArray parameters = new VarArrayClass();
+                parameters.Add(fLayer);
+                parameters.Add(System.IO.Path.Combine(pathFGDB, "output"));
+
+                gp.Execute("CopyFeatures_management", parameters, null);
+
+                this.ZippaFGDB(System.IO.Path.GetDirectoryName(pathFGDB), out string pathZip);
+                result.AddString("zip", pathZip);
             }
             catch (Exception errore)
             {
+                object severity = null;
+                string errGp = gp.GetMessages(ref severity);
+                if (!string.IsNullOrEmpty(errGp))
+                {
+                    result.AddBoolean("GeoProcessingError", true);
+                    result.AddString("erroreGp", errGp);
+                }
+
                 result.AddString("errorDescription", errore.Message);
                 result.AddBoolean("hasError", true);
             }
@@ -147,33 +183,29 @@ namespace SOE_FeatureDownload
             return Encoding.UTF8.GetBytes(result.ToJson());
         }
 
-        private void CreaWorkSpaceOutput(out IPropertySet propertySet, out string pathFGDB)
+        private void CreaWorkSpaceOutput(out IWorkspaceName WorkspaceName, out string pathFGDB)
         {
             IWorkspaceFactory2 workF = new FileGDBWorkspaceFactory() as IWorkspaceFactory2;
             Guid g = Guid.NewGuid();
 
             string timeStamp = DateTime.UtcNow.ToString("dd-MM-yyyy", CultureInfo.CurrentUICulture);
 
-            string basePath = $@"C:\arcgisserver\directories\arcgisoutput\_ags_{g}";
+            string basePath = $@"C:\arcgisserver\directories\arcgisoutput\_ags_{timeStamp}";
 
-            string nomeFGDB = $@"FGDB_{timeStamp}.gdb";
+            string nomeFGDB = $@"FGDB_{g}.gdb";
 
             pathFGDB = System.IO.Path.Combine(basePath, nomeFGDB);
 
-            if (!System.IO.Directory.Exists(pathFGDB))
-                System.IO.Directory.CreateDirectory(pathFGDB);
+            if (!System.IO.Directory.Exists(basePath))
+                System.IO.Directory.CreateDirectory(basePath);
 
             #region Parte dedicata alla creazione di un File Geodatabase
             // Istanzio l'oggetto singleton
             IWorkspaceFactory2 workspaceFactory = new FileGDBWorkspaceFactory() as IWorkspaceFactory2;
-               
-            workspaceFactory.Create(pathFGDB, nomeFGDB, null, 0);
+
+            WorkspaceName = workspaceFactory.Create(basePath, nomeFGDB, null, 0);
 
             #endregion
-
-            // Mi dedico nella creazione del FGDB locale
-            propertySet = new PropertySetClass();
-            propertySet.SetProperty("DATABASE", pathFGDB);
 
             #region Rilascio tutti gli oggetti singleton
             int resLeft = 0;
@@ -183,7 +215,17 @@ namespace SOE_FeatureDownload
             }
             while (resLeft > 0);
             #endregion
+        }
 
+        /// <summary>
+        /// Metodo semplice per zippare path
+        /// </summary>
+        /// <param name="pathFGDB"></param>
+        /// <param name="pathZip"></param>
+        private void ZippaFGDB(string pathFGDB, out string pathZip)
+        {
+            pathZip = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(pathFGDB), "_ags_fileZip.zip");
+            System.IO.Compression.ZipFile.CreateFromDirectory(pathFGDB, pathZip);
         }
 
     }
